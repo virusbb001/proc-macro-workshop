@@ -10,25 +10,36 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let Data::Struct(data) = ast.data else {
         panic!("Builder is not used for struct");
     };
-    let Fields::Named(_fields) = data.fields else {
+    let Fields::Named(fields) = data.fields else {
         panic!("Builder is not used for struct with named fields");
     };
+    let build_struct_type_fields = fields.named.iter().map(|v| {
+        let vis = &v.vis;
+        let ident = &v.ident;
+        let ty = &v.ty;
+        quote! {
+            #vis #ident: Option<#ty>
+        }
+    });
+
+    let build_struct_init_fields = fields.named.iter().map(|v| {
+        let ident = &v.ident;
+
+        quote! {
+            #ident: None
+        }
+    });
+
     let builder_name = syn::Ident::new(&format!("{}Builder", ident), Span::call_site());
     proc_macro::TokenStream::from(quote! {
         pub struct #builder_name {
-            executable: Option<String>,
-            args: Option<Vec<String>>,
-            env: Option<Vec<String>>,
-            current_dir: Option<String>,
+            #(#build_struct_type_fields),*
         }
 
         impl #ident {
             pub fn builder() -> #builder_name {
                 #builder_name {
-                    executable: None,
-                    args: None,
-                    env: None,
-                    current_dir: None,
+                    #(#build_struct_init_fields),*
                 }
             }
         }
