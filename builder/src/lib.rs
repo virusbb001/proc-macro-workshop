@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use syn::{self, parse_macro_input, DeriveInput, Data, Fields};
+use syn::{self, parse_macro_input, DeriveInput, Data, Fields, Field};
 use quote::quote;
 
 #[proc_macro_derive(Builder)]
@@ -14,9 +14,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         panic!("Builder is not used for struct with named fields");
     };
     let build_struct_type_fields = fields.named.iter().map(|v| {
-        let vis = &v.vis;
-        let ident = &v.ident;
-        let ty = &v.ty;
+        let Field { vis, ident, ty, .. } = v;
         quote! {
             #vis #ident: Option<#ty>
         }
