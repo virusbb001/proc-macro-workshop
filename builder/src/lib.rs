@@ -28,6 +28,17 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
+    let setter_fns = fields.named.iter().map(|v| {
+        let Field { ident, ty, .. } = v;
+
+        quote! {
+            fn #ident(&mut self, #ident: #ty) -> &mut Self {
+                self.#ident = Some(#ident);
+                self
+            }
+        }
+    });
+
     let builder_name = syn::Ident::new(&format!("{}Builder", ident), Span::call_site());
     proc_macro::TokenStream::from(quote! {
         pub struct #builder_name {
@@ -40,6 +51,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     #(#build_struct_init_fields),*
                 }
             }
+        }
+
+        impl #builder_name {
+            #(#setter_fns)*
         }
     })
 }
