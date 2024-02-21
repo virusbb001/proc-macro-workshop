@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use syn::{self, parse_macro_input, DeriveInput, Data, Fields, Field};
+use syn::{parse_macro_input, DeriveInput, Data, Fields, Field, LitStr};
 use quote::quote;
 
 #[proc_macro_derive(Builder)]
@@ -39,6 +39,20 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
+    let builder_guards = fields.named.iter().map(|v| {
+        let Some(ident) = &v.ident else {
+            return quote! {}
+        };
+
+        let error_message = LitStr::new(&format!("field {} is missing", ident), Span::call_site());
+
+        quote! {
+            let #ident = self.#ident.clone().ok_or(#error_message)?;
+        }
+    });
+
+    let builder_fields = fields.named.iter().map(|v| &v.ident);
+
     let builder_name = syn::Ident::new(&format!("{}Builder", ident), Span::call_site());
     proc_macro::TokenStream::from(quote! {
         pub struct #builder_name {
@@ -55,6 +69,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
         impl #builder_name {
             #(#setter_fns)*
+
+            pub fn build(&mut self) -> Result<Command, Box<dyn std::error::Error>> {
+                #(#builder_guards)*
+                Ok(Command {
+                    #(#builder_fields),*
+                })
+            }
         }
     })
 }
