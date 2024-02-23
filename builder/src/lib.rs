@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use syn::{parse_macro_input, DeriveInput, Data, Fields, Field, LitStr};
+use syn::{parse_macro_input, DeriveInput, Data, Fields, Field, LitStr, Type, PathArguments, GenericArgument};
 use quote::quote;
 
 #[proc_macro_derive(Builder)]
@@ -15,8 +15,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
     };
     let build_struct_type_fields = fields.named.iter().map(|v| {
         let Field { vis, ident, ty, .. } = v;
+        let field_type = if is_option(ty) {
+            quote! { #ty }
+        } else {
+            quote! { Option<#ty> }
+        };
         quote! {
-            #vis #ident: Option<#ty>
+            #vis #ident: #field_type
         }
     });
 
@@ -28,9 +33,15 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
-    let setter_fns = fields.named.iter().map(|v| {
+    let setter_fns = fields.named.iter().filter_map(|v| {
         let Field { ident, ty, .. } = v;
 
+        if is_option(ty) {
+            get_type_of_option(ty).map(|ty| (ident, ty))
+        } else {
+            Some((ident, ty))
+        }
+    }).map(|(ident, ty)| {
         quote! {
             fn #ident(&mut self, #ident: #ty) -> &mut Self {
                 self.#ident = Some(#ident);
@@ -39,15 +50,21 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
-    let builder_guards = fields.named.iter().map(|v| {
+    let builder_guards = fields.named.iter().filter_map(|v| {
         let Some(ident) = &v.ident else {
-            return quote! {}
+            return None;
         };
 
-        let error_message = LitStr::new(&format!("field {} is missing", ident), Span::call_site());
+        if is_option(&v.ty) {
+            Some(quote! {
+                let #ident = self.#ident.clone();
+            })
+        } else {
+            let error_message = LitStr::new(&format!("field {} is missing", ident), Span::call_site());
 
-        quote! {
-            let #ident = self.#ident.clone().ok_or(#error_message)?;
+            Some(quote! {
+                let #ident = self.#ident.clone().ok_or(#error_message)?;
+            })
         }
     });
 
@@ -76,6 +93,43 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     #(#builder_fields),*
                 })
             }
+        }
+    })
+}
+
+fn is_option (ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+
+    let Some(type_path) = type_path.path.segments.first() else {
+        return false;
+    };
+
+    type_path.ident == "Option"
+}
+
+fn get_type_of_option (ty: &Type) -> Option<&Type> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+
+    let Some(type_path) = type_path.path.segments.first() else {
+        return None;
+    };
+
+    if type_path.ident != "Option" {
+        return None;
+    }
+
+    let PathArguments::AngleBracketed(ref generic_args) = type_path.arguments else {
+        return None;
+    };
+
+    generic_args.args.iter().find_map(|arg| {
+        match arg {
+            GenericArgument::Type(generic_type) => Some(generic_type),
+            _ => None
         }
     })
 }
