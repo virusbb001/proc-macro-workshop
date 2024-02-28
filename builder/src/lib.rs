@@ -1,9 +1,10 @@
+use syn::spanned::Spanned;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
     parse_macro_input, Data, DeriveInput, Field, Fields, GenericArgument, LitStr, MetaNameValue,
-    PathArguments, Type, Expr, Lit, Attribute,
+    PathArguments, Type, Expr, Lit, Attribute, Error,
 };
 
 #[proc_macro_derive(Builder, attributes(builder))]
@@ -27,6 +28,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
             #vis #ident: #field_type
         }
     });
+
+    if let Some(err) = fields.named.iter().find_map(|v| {
+        check_builder_attr(&v.attrs).err()
+    }) {
+        return err.into_compile_error().into()
+    };
+
 
     let build_struct_init_fields = fields.named.iter().map(|v| {
         let init = if is_vec(&v.ty) && get_each_arg(&v.attrs).is_some() {
@@ -188,6 +196,22 @@ fn get_type_of_option(ty: &Type) -> Option<&Type> {
         GenericArgument::Type(generic_type) => Some(generic_type),
         _ => None,
     })
+}
+
+fn check_builder_attr(attrs: &[Attribute]) -> Result<(), Error> {
+    // only accept each
+    let a = attrs.iter()
+        .find(|attr|{
+            let Ok(attr) = attr.parse_args::<MetaNameValue>() else {
+                return false
+            };
+            attr.path.segments.iter().any(|segment| segment.ident != "each")
+        });
+    if let Some(a) = a {
+        Err(Error::new(a.meta.span(), "expected `builder(each = \"...\")`"))
+    } else {
+        Ok(())
+    }
 }
 
 fn get_each_arg(attrs: &[Attribute]) -> Option<LitStr> {
