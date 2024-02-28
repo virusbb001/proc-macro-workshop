@@ -22,7 +22,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let field_type = if is_option(ty) || get_each_arg(attrs).is_some() {
             quote! { #ty }
         } else {
-            quote! { Option<#ty> }
+            quote! { std::option::Option<#ty> }
         };
         quote! {
             #vis #ident: #field_type
@@ -38,9 +38,9 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let build_struct_init_fields = fields.named.iter().map(|v| {
         let init = if is_vec(&v.ty) && get_each_arg(&v.attrs).is_some() {
-            quote! { Vec::new() }
+            quote! { std::vec::Vec::new() }
         } else {
-            quote! { None }
+            quote! { std::option::Option::None }
         };
         let ident = &v.ident;
 
@@ -79,7 +79,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
             } else {
                 quote! {
                     fn #ident(&mut self, #ident: #ty) -> &mut Self {
-                        self.#ident = Some(#ident);
+                        self.#ident = std::option::Option::Some(#ident);
                         self
                     }
                 }
@@ -124,7 +124,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         impl #builder_name {
             #(#setter_fns)*
 
-            pub fn build(&mut self) -> Result<Command, Box<dyn std::error::Error>> {
+            pub fn build(&mut self) -> std::result::Result<Command, std::boxed::Box<dyn std::error::Error>> {
                 #(#builder_guards)*
                 Ok(Command {
                     #(#builder_fields),*
@@ -138,6 +138,8 @@ fn is_option(ty: &Type) -> bool {
     let Type::Path(type_path) = ty else {
         return false;
     };
+
+    eprintln!("{:#?}", type_path);
 
     let Some(type_path) = type_path.path.segments.first() else {
         return false;
