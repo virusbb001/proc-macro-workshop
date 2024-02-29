@@ -35,6 +35,19 @@ pub fn derive(input: TokenStream) -> TokenStream {
         })
     });
 
+    let setters = fields.clone().filter_map(|field| {
+        let ty = &field.ty;
+        field.ident.as_ref().map(|ident| {
+            quote! {
+                pub fn #ident(&mut self, #ident: #ty) -> &mut Self {
+                    self.#ident = Some(#ident);
+                    self
+                }
+            }
+        })
+
+    });
+
     quote! {
         pub struct #builder_name {
             #(#builder_field),*
@@ -46,6 +59,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     #(#builder_init),*
                 }
             }
+        }
+
+        impl #builder_name {
+            #(#setters)*
         }
     }.into()
 }
