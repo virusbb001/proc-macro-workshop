@@ -48,6 +48,18 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     });
 
+    let field_guards = fields.clone().filter_map(|field| {
+        field.ident.as_ref().map(|ident| {
+            quote! {
+                let Some(#ident) = self.#ident.clone() else {
+                    return Err("field is not enough".to_string().into());
+                };
+            }
+        })
+    });
+
+    let field_idents = fields.clone().filter_map(|field| field.ident.as_ref());
+
     quote! {
         pub struct #builder_name {
             #(#builder_field),*
@@ -63,6 +75,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
         impl #builder_name {
             #(#setters)*
+
+            pub fn build(&mut self) -> Result<Command, Box<dyn std::error::Error>> {
+                #(#field_guards)*
+
+                Ok(Command {
+                    #(#field_idents),*
+                })
+            }
         }
     }.into()
 }
