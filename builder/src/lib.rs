@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Ident, Data};
+use syn::{parse_macro_input, DeriveInput, Ident, Data, Type, PathArguments, GenericArgument};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -29,8 +29,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let builder_field = fields.clone().filter_map(|field| {
         let ty = &field.ty;
         field.ident.as_ref().map(|ident| {
-            quote! {
-                #ident: Option<#ty>
+            if is_option(ty) {
+                quote! {
+                    #ident: #ty
+                }
+            } else {
+                quote! {
+                    #ident: Option<#ty>
+                }
             }
         })
     });
@@ -38,22 +44,40 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let setters = fields.clone().filter_map(|field| {
         let ty = &field.ty;
         field.ident.as_ref().map(|ident| {
-            quote! {
-                pub fn #ident(&mut self, #ident: #ty) -> &mut Self {
-                    self.#ident = Some(#ident);
-                    self
+            if is_option(ty) {
+                let arg_ty = get_type_in_generics(ty);
+
+                quote! {
+                    pub fn #ident(&mut self, #ident: #arg_ty) -> &mut Self {
+                        self.#ident = Some(#ident);
+                        self
+                    }
+                }
+
+            } else {
+                quote! {
+                    pub fn #ident(&mut self, #ident: #ty) -> &mut Self {
+                        self.#ident = Some(#ident);
+                        self
+                    }
                 }
             }
         })
-
     });
 
     let field_guards = fields.clone().filter_map(|field| {
+        let ty = &field.ty;
         field.ident.as_ref().map(|ident| {
-            quote! {
-                let Some(#ident) = self.#ident.clone() else {
-                    return Err("field is not enough".to_string().into());
-                };
+            if is_option(ty) {
+                quote! {
+                    let current_dir = self.current_dir.clone();
+                }
+            } else {
+                quote! {
+                    let Some(#ident) = self.#ident.clone() else {
+                        return Err("field is not enough".to_string().into());
+                    };
+                }
             }
         })
     });
@@ -85,4 +109,30 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         }
     }.into()
+}
+
+fn is_option(ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+
+    type_path
+        .path
+        .segments
+        .first()
+        .map(|segment| segment.ident == "Option")
+        .unwrap_or(false)
+}
+
+fn get_type_in_generics(ty: &Type) -> Option<&Type> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let PathArguments::AngleBracketed(ref args) = type_path.path.segments.first()?.arguments else {
+        return None;
+};
+    let Some(GenericArgument::Type(ty)) = args.args.first() else {
+        return None;
+    };
+    Some(ty)
 }
