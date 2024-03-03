@@ -125,10 +125,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
         impl #builder_name {
             #(#setters)*
 
-            pub fn build(&mut self) -> std::result::Result<Command, std::boxed::Box<dyn std::error::Error>> {
+            pub fn build(&mut self) -> std::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
                 #(#field_guards)*
 
-                std::result::Result::Ok(Command {
+                std::result::Result::Ok(#name {
                     #(#field_idents),*
                 })
             }
