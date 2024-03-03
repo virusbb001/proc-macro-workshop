@@ -1,3 +1,4 @@
+use syn::spanned::Spanned;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -17,6 +18,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
         .fields
         .iter()
         .filter(|field| field.ident.is_some());
+
+    let unexpected_attrs = fields.clone().find_map(|field|
+        get_unexpected_attributes(&field.attrs).map(|err| err.to_compile_error())
+    );
 
     let builder_init = fields.clone().filter_map(|field| {
         let attrs = &field.attrs;
@@ -103,6 +108,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let field_idents = fields.clone().filter_map(|field| field.ident.as_ref());
 
     quote! {
+        #unexpected_attrs
+
         pub struct #builder_name {
             #(#builder_field),*
         }
@@ -148,7 +155,7 @@ fn get_type_in_generics(ty: &Type) -> Option<&Type> {
     };
     let PathArguments::AngleBracketed(ref args) = type_path.path.segments.first()?.arguments else {
         return None;
-};
+    };
     let Some(GenericArgument::Type(ty)) = args.args.first() else {
         return None;
     };
@@ -171,4 +178,14 @@ fn get_value_of_each(attrs: &[Attribute]) -> Option<String> {
 
             Some(lit_str.value())
         })
+}
+
+fn get_unexpected_attributes(attrs: &[Attribute]) -> Option<syn::Error> {
+    attrs
+        .first()
+        .filter(|attr|
+            attr.parse_args::<MetaNameValue>()
+                .ok()
+                .is_some_and(|name_value| !name_value.path.is_ident("each")))
+        .map(|attr| syn::Error::new(attr.meta.span(), "expected `builder(each = \"...\")`"))
 }
