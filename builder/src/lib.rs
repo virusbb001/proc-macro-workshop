@@ -1,9 +1,9 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Ident, Data, Type, PathArguments, GenericArgument};
+use syn::{DeriveInput, Ident, Data, Type, PathArguments, GenericArgument, Attribute, MetaNameValue, Expr, Lit, parse_macro_input};
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -19,9 +19,16 @@ pub fn derive(input: TokenStream) -> TokenStream {
         .filter(|field| field.ident.is_some());
 
     let builder_init = fields.clone().filter_map(|field| {
+        let attrs = &field.attrs;
         field.ident.as_ref().map(|ident| {
-            quote! {
-                #ident: None
+            if get_value_of_each(attrs).is_some() {
+                quote! {
+                    #ident: Vec::new()
+                }
+            } else {
+                quote! {
+                    #ident: None
+                }
             }
         })
     });
@@ -29,7 +36,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let builder_field = fields.clone().filter_map(|field| {
         let ty = &field.ty;
         field.ident.as_ref().map(|ident| {
-            if is_option(ty) {
+            if is_option(ty) || get_value_of_each(&field.attrs).is_some() {
                 quote! {
                     #ident: #ty
                 }
@@ -43,6 +50,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let setters = fields.clone().filter_map(|field| {
         let ty = &field.ty;
+        let attrs = &field.attrs;
         field.ident.as_ref().map(|ident| {
             if is_option(ty) {
                 let arg_ty = get_type_in_generics(ty);
@@ -54,6 +62,15 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     }
                 }
 
+            } else if let Some(each) = get_value_of_each(attrs) {
+                let each = Ident::new(&each, Span::call_site());
+                let arg_ty = get_type_in_generics(ty);
+                quote! {
+                    pub fn #each(&mut self, #each: #arg_ty) -> &mut Self {
+                        self.#ident.push(#each);
+                        self
+                    }
+                }
             } else {
                 quote! {
                     pub fn #ident(&mut self, #ident: #ty) -> &mut Self {
@@ -67,10 +84,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let field_guards = fields.clone().filter_map(|field| {
         let ty = &field.ty;
+        let attrs = &field.attrs;
         field.ident.as_ref().map(|ident| {
-            if is_option(ty) {
+            if is_option(ty) || get_value_of_each(attrs).is_some() {
                 quote! {
-                    let current_dir = self.current_dir.clone();
+                    let #ident = self.#ident.clone();
                 }
             } else {
                 quote! {
@@ -135,4 +153,22 @@ fn get_type_in_generics(ty: &Type) -> Option<&Type> {
         return None;
     };
     Some(ty)
+}
+
+fn get_value_of_each(attrs: &[Attribute]) -> Option<String> {
+    attrs
+        .first()
+        .and_then(|attr| attr.parse_args::<MetaNameValue>().ok())
+        .filter(|name_value| name_value.path.is_ident("each"))
+        .and_then(|name_value| {
+            let Expr::Lit(lit) = name_value.value else {
+                return None;
+            };
+
+            let Lit::Str(lit_str) = lit.lit else {
+                return None;
+            };
+
+            Some(lit_str.value())
+        })
 }
