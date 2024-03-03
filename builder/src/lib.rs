@@ -28,11 +28,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
         field.ident.as_ref().map(|ident| {
             if get_value_of_each(attrs).is_some() {
                 quote! {
-                    #ident: Vec::new()
+                    #ident: std::vec::Vec::new()
                 }
             } else {
                 quote! {
-                    #ident: None
+                    #ident: std::option::Option::None
                 }
             }
         })
@@ -47,7 +47,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 }
             } else {
                 quote! {
-                    #ident: Option<#ty>
+                    #ident: std::option::Option<#ty>
                 }
             }
         })
@@ -62,7 +62,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
                 quote! {
                     pub fn #ident(&mut self, #ident: #arg_ty) -> &mut Self {
-                        self.#ident = Some(#ident);
+                        self.#ident = std::option::Option::Some(#ident);
                         self
                     }
                 }
@@ -79,7 +79,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
             } else {
                 quote! {
                     pub fn #ident(&mut self, #ident: #ty) -> &mut Self {
-                        self.#ident = Some(#ident);
+                        self.#ident = std::option::Option::Some(#ident);
                         self
                     }
                 }
@@ -97,8 +97,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 }
             } else {
                 quote! {
-                    let Some(#ident) = self.#ident.clone() else {
-                        return Err("field is not enough".to_string().into());
+                    let std::option::Option::Some(#ident) = self.#ident.clone() else {
+                        return std::result::Result::Err("field is not enough".to_string().into());
                     };
                 }
             }
@@ -125,10 +125,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
         impl #builder_name {
             #(#setters)*
 
-            pub fn build(&mut self) -> Result<Command, Box<dyn std::error::Error>> {
+            pub fn build(&mut self) -> std::result::Result<Command, std::boxed::Box<dyn std::error::Error>> {
                 #(#field_guards)*
 
-                Ok(Command {
+                std::result::Result::Ok(Command {
                     #(#field_idents),*
                 })
             }
