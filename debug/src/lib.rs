@@ -1,16 +1,20 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Data, Meta, Attribute, Expr, Lit};
+use syn::{parse_macro_input, DeriveInput, Data, Meta, Attribute, Expr, Lit, Generics, GenericParam, parse_quote};
 use syn::spanned::Spanned;
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let ident = &input.ident;
-    let ident_litstr = ident.to_string();
+
     let Data::Struct(input_struct) = input.data else {
         return syn::Error::new(input.span(), "CustomDebug is not used for struct").into_compile_error().into();
     };
+
+    let ident = &input.ident;
+    let ident_litstr = ident.to_string();
+    let generics = add_trait_bounds(input.generics);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let field_call = input_struct.fields.iter().filter_map(|field| {
         let ident = field.ident.as_ref()?;
@@ -32,7 +36,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
     quote! {
-        impl std::fmt::Debug for #ident {
+        impl #impl_generics std::fmt::Debug for #ident #ty_generics #where_clause {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
                 f.debug_struct(#ident_litstr)
                     #(#field_call)*
@@ -63,4 +67,13 @@ fn get_debug_attr(attrs: &[Attribute]) -> Option<Result<String, syn::Error>> {
                 _ => Err(syn::Error::new(lit.lit.span(), "value of debug is not string"))
             }
         })
+}
+
+fn add_trait_bounds(mut generics: Generics) -> Generics {
+    for param in &mut generics.params {
+        if let GenericParam::Type(ref mut type_param) = *param {
+            type_param.bounds.push(parse_quote!(std::fmt::Debug));
+        }
+    }
+    generics
 }
