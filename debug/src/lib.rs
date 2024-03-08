@@ -1,19 +1,33 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Data, Meta, Attribute, Expr, Lit, Generics, GenericParam, parse_quote};
 use syn::spanned::Spanned;
+use syn::{
+    parse_macro_input, parse_quote, Attribute, Data, DeriveInput, Expr, Fields, GenericParam,
+    Generics, Lit, Meta, Type,
+};
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     let Data::Struct(input_struct) = input.data else {
-        return syn::Error::new(input.span(), "CustomDebug is not used for struct").into_compile_error().into();
+        return syn::Error::new(input.span(), "CustomDebug is not used for struct")
+            .into_compile_error()
+            .into();
     };
 
     let ident = &input.ident;
     let ident_litstr = ident.to_string();
-    let generics = add_trait_bounds(input.generics);
+
+    let phantom_type_fields = get_type_phantom_data_in_fields(&input_struct.fields);
+    let bound = phantom_type_fields
+        .iter()
+        .map(|ty| {
+            quote! { #ty: std::fmt::Debug }
+        })
+        .collect::<Vec<_>>();
+
+    let generics = if bound.is_empty() { add_trait_bounds(input.generics) } else { input.generics };
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let field_call = input_struct.fields.iter().filter_map(|field| {
@@ -22,11 +36,9 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let debug_attr = get_debug_attr(&field.attrs);
         if let Some(debug_attr) = debug_attr {
             match debug_attr {
-                Ok(debug) => {
-                    Some(quote! {
-                        .field(#ident_str, &format_args!(#debug, &self.#ident))
-                    })
-                },
+                Ok(debug) => Some(quote! {
+                    .field(#ident_str, &format_args!(#debug, &self.#ident))
+                }),
                 Err(err) => Some(err.into_compile_error()),
             }
         } else {
@@ -35,8 +47,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
             })
         }
     });
+
+    let impl_clause = if bound.is_empty() {
+        quote! { #impl_generics std::fmt::Debug for #ident #ty_generics #where_clause }
+    } else {
+        quote! { #impl_generics std::fmt::Debug for #ident #ty_generics where #(#bound),* }
+    };
     quote! {
-        impl #impl_generics std::fmt::Debug for #ident #ty_generics #where_clause {
+        impl #impl_clause {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
                 f.debug_struct(#ident_litstr)
                     #(#field_call)*
@@ -49,24 +67,44 @@ pub fn derive(input: TokenStream) -> TokenStream {
 fn get_debug_attr(attrs: &[Attribute]) -> Option<Result<String, syn::Error>> {
     attrs
         .iter()
-        .filter_map(|attr| {
-            match &attr.meta {
-                Meta::NameValue(name_value) => Some(name_value),
-                _ => None,
-            }
+        .filter_map(|attr| match &attr.meta {
+            Meta::NameValue(name_value) => Some(name_value),
+            _ => None,
         })
-        .find(|name_value| {
-            name_value.path.is_ident("debug")
-        })
+        .find(|name_value| name_value.path.is_ident("debug"))
         .map(|name_value| {
             let Expr::Lit(ref lit) = name_value.value else {
-                return Err(syn::Error::new(name_value.span(), "value of debug is not string"));
+                return Err(syn::Error::new(
+                    name_value.span(),
+                    "value of debug is not string",
+                ));
             };
             match &lit.lit {
                 Lit::Str(lit_str) => Ok(lit_str.value()),
-                _ => Err(syn::Error::new(lit.lit.span(), "value of debug is not string"))
+                _ => Err(syn::Error::new(
+                    lit.lit.span(),
+                    "value of debug is not string",
+                )),
             }
         })
+}
+
+fn get_type_phantom_data_in_fields(fields: &Fields) -> Vec<&Type> {
+    fields
+        .iter()
+        .filter_map(|field| match field.ty {
+            Type::Path(ref path)
+                if path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "PhantomData") =>
+            {
+                Some(&field.ty)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn add_trait_bounds(mut generics: Generics) -> Generics {
