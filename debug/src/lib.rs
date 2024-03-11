@@ -3,7 +3,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{
     parse_macro_input, parse_quote, Attribute, Data, DeriveInput, Expr, Fields, GenericParam,
-    Generics, Lit, Meta, Type,
+    Generics, Lit, Meta, Type, TypePath, PathArguments, GenericArgument,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -20,12 +20,21 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let ident_litstr = ident.to_string();
 
     let phantom_type_fields = get_type_phantom_data_in_fields(&input_struct.fields);
-    let bound = phantom_type_fields
+    let mut bound = phantom_type_fields
         .iter()
         .map(|ty| {
             quote! { #ty: std::fmt::Debug }
         })
         .collect::<Vec<_>>();
+
+    bound.extend(
+        get_types_to_bind_debug(
+            &input_struct.fields,
+            &input.generics
+        ).iter().map(|ty| {
+            quote! { #ty: std::fmt::Debug }
+        })
+    );
 
     let generics = if bound.is_empty() { add_trait_bounds(input.generics) } else { input.generics };
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -114,4 +123,56 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
         }
     }
     generics
+}
+
+fn get_types_to_bind_debug<'a>(fields: &'a Fields, generics: &Generics) -> Vec<&'a TypePath> {
+    let generics = generics.params.iter().filter_map(|param| {
+        match param {
+            GenericParam::Type(ty) => Some(&ty.ident),
+            _ => None,
+        }
+    }).collect::<Vec<_>>();
+    fields
+        .iter()
+        .filter_map(|field| {
+            let Type::Path(ref ty) = field.ty else {
+                return None;
+            };
+            Some(ty)
+        })
+        .filter_map(|ty| {
+            let is_associated = ty.path.segments.first().is_some_and(|ty| {
+                generics.contains(&&ty.ident)
+            });
+            if is_associated {
+                Some(ty)
+            } else {
+                if ty.path.segments.first().is_some_and(|segment| {
+                    segment.ident == "PhantomData"
+                }) {
+                    return None;
+                }
+                let Some(PathArguments::AngleBracketed(args)) = ty.path.segments.last().map(|segment| &segment.arguments) else {
+                    return None;
+                };
+                args.args.iter().filter_map(|arg| {
+                    if let GenericArgument::Type(ty) = arg {
+                        Some(ty)
+                    } else {
+                        None
+                    }
+                }).filter_map(|ty| {
+                    if let Type::Path(path) = ty {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                }).find(|ty| {
+                        ty.path.segments.first().is_some_and(|ty| {
+                            generics.contains(&&ty.ident)
+                        })
+                })
+            }
+        })
+        .collect::<Vec<_>>()
 }
