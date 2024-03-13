@@ -1,9 +1,10 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use proc_macro2::TokenStream as TokenStream2;
+use quote::{quote, ToTokens};
 use syn::spanned::Spanned;
 use syn::{
     parse_macro_input, parse_quote, Attribute, Data, DeriveInput, Expr, Fields, GenericParam,
-    Generics, Lit, Meta, Type, TypePath, PathArguments, GenericArgument,
+    Generics, Lit, Meta, Type, TypePath, PathArguments, GenericArgument, MetaNameValue, ExprLit, WherePredicate,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -15,27 +16,25 @@ pub fn derive(input: TokenStream) -> TokenStream {
             .into_compile_error()
             .into();
     };
+    let struct_bound = get_bound_in_debug_attr(&input.attrs).map(|bound| {
+        let token_stream = bound.and_then(|bound| {
+            syn::parse_str::<WherePredicate>(&bound).map(|predicate| predicate.to_token_stream())
+        });
+
+        match token_stream {
+            Ok(token_stream) => token_stream,
+            Err(err) => err.into_compile_error(),
+        }
+    }).into_iter().collect::<Vec<_>>();
 
     let ident = &input.ident;
     let ident_litstr = ident.to_string();
 
-    let phantom_type_fields = get_type_phantom_data_in_fields(&input_struct.fields);
-    let mut bound = phantom_type_fields
-        .iter()
-        .map(|ty| {
-            quote! { #ty: std::fmt::Debug }
-        })
-        .collect::<Vec<_>>();
-
-    bound.extend(
-        get_types_to_bind_debug(
-            &input_struct.fields,
-            &input.generics
-        ).iter().map(|ty| {
-            quote! { #ty: std::fmt::Debug }
-        })
-    );
-
+    let bound = if struct_bound.is_empty() {
+        infer_bound_type_from_fields(&input_struct.fields, &input.generics)
+    } else {
+        struct_bound
+    };
     let generics = if bound.is_empty() { add_trait_bounds(input.generics) } else { input.generics };
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
@@ -76,9 +75,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
 fn get_debug_attr(attrs: &[Attribute]) -> Option<Result<String, syn::Error>> {
     attrs
         .iter()
-        .filter_map(|attr| match &attr.meta {
-            Meta::NameValue(name_value) => Some(name_value),
-            _ => None,
+        .filter_map(|attr| {
+            match &attr.meta {
+                Meta::NameValue(name_value) => Some(name_value),
+                _ => None,
+            }
         })
         .find(|name_value| name_value.path.is_ident("debug"))
         .map(|name_value| {
@@ -175,4 +176,50 @@ fn get_types_to_bind_debug<'a>(fields: &'a Fields, generics: &Generics) -> Vec<&
             }
         })
         .collect::<Vec<_>>()
+}
+
+fn get_bound_in_debug_attr(attrs: &[Attribute]) -> Option<Result<String, syn::Error>> {
+    attrs
+        .iter()
+        .filter_map(|attr| match &attr.meta {
+            Meta::List(attr_list) => Some(attr_list),
+            _ => None,
+        })
+        .find(|list| list.path.is_ident("debug"))
+        .and_then(|list| list.parse_args::<MetaNameValue>().ok())
+        .filter(|name_value| name_value.path.is_ident("bound"))
+        .map(|name_value| match name_value.value {
+            Expr::Lit(ExprLit{lit: Lit::Str(litstr), ..}) => {
+                Ok(litstr.value())
+            }
+            _ => Err(syn::Error::new(
+                    name_value.span(),
+                    "value of debug is not string",
+                ))
+        })
+}
+
+fn infer_bound_type_from_fields(
+    fields: &Fields,
+    generics: &Generics,
+) -> Vec<TokenStream2>{
+    let phantom_type_fields = get_type_phantom_data_in_fields(fields);
+    let mut bound = phantom_type_fields
+        .iter()
+        .map(|ty| {
+            quote! { #ty: std::fmt::Debug }
+        })
+        .collect::<Vec<_>>();
+
+    bound.extend(
+        get_types_to_bind_debug(
+            fields,
+            generics
+        ).iter().map(|ty| {
+            quote! { #ty: std::fmt::Debug }
+        })
+    );
+
+    bound
+
 }
