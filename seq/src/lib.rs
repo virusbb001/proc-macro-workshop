@@ -4,5 +4,5 @@ use proc_macro::TokenStream;
 pub fn seq(input: TokenStream) -> TokenStream {
     let _ = input;
 
-    unimplemented!()
+    TokenStream::new()
 }
