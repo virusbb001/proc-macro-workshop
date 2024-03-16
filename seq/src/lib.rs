@@ -1,5 +1,7 @@
+use std::iter::Peekable;
+
 use proc_macro::TokenStream;
-use proc_macro2::{TokenStream as TokenStream2, TokenTree, Literal, Group};
+use proc_macro2::{TokenStream as TokenStream2, TokenTree, Literal, Group, Span};
 use quote::quote;
 use syn::{Ident, parse::Parse, parse_macro_input, Token, LitInt, braced};
 
@@ -31,6 +33,78 @@ impl Parse for Seq {
     }
 }
 
+struct ReplaceTokenState<'a, 'b, T>
+    where T: Iterator<Item=TokenTree> {
+        iter: &'a mut Peekable<T>,
+        ident_replace: &'b Ident,
+        n: usize,
+}
+
+trait ReplaceToken<T: std::iter::Iterator<Item = proc_macro2::TokenTree>> {
+    fn replace_token<'a>(
+        &mut self,
+        ident_replace: &'a Ident,
+        n: usize
+    ) -> ReplaceTokenState<'_, 'a, T>;
+}
+
+impl<T> ReplaceToken<T> for Peekable<T>
+    where T: Iterator<Item=TokenTree>
+{
+    fn replace_token<'a>(&mut self, ident_replace: &'a Ident, n: usize) -> ReplaceTokenState<'_, 'a, T> {
+        ReplaceTokenState {
+            iter: self,
+            ident_replace,
+            n
+        }
+    }
+}
+
+impl<T: std::iter::Iterator<Item = proc_macro2::TokenTree>> Iterator for ReplaceTokenState<'_, '_, T> {
+    type Item = TokenTree;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let token_tree = self.iter.next()?;
+        let token_tree = match token_tree {
+            TokenTree::Group(group) => {
+                let delimiter = group.delimiter();
+                let stream = group.stream().into_iter().peekable().replace_token(self.ident_replace, self.n).collect::<TokenStream2>();
+                let span = group.span();
+                let mut group = Group::new(delimiter, stream);
+                group.set_span(span);
+                TokenTree::Group(group)
+            },
+            TokenTree::Ident(ident) => {
+                if let Some(TokenTree::Punct(next)) = self.iter.peek() {
+                    if next.as_char() == '~' {
+                        self.iter.next()?; // consume ~
+                        let TokenTree::Ident(next) = self.iter.next().unwrap() else {
+                            panic!("element followed after ~ is not ident");
+                        };
+                        let next = if next == *self.ident_replace {
+                            self.n.to_string()
+                        } else {
+                            next.to_string()
+                        };
+                        TokenTree::Ident(Ident::new(&format!("{}{}", ident, next), Span::call_site()))
+                    } else if ident == *self.ident_replace {
+                        TokenTree::Literal(Literal::usize_unsuffixed(self.n))
+                    } else {
+                        TokenTree::Ident(ident)
+                    }
+                } else if ident == *self.ident_replace {
+                    TokenTree::Literal(Literal::usize_unsuffixed(self.n))
+                } else {
+                    TokenTree::Ident(ident)
+                }
+            },
+            TokenTree::Punct(_) => token_tree,
+            TokenTree::Literal(_) => token_tree,
+        };
+        Some(token_tree)
+    }
+}
+
 #[proc_macro]
 pub fn seq(input: TokenStream) -> TokenStream {
     let Seq {
@@ -51,36 +125,10 @@ pub fn seq(input: TokenStream) -> TokenStream {
     };
 
     let tokens = (start..end).map(|n| {
-        tokens.clone().into_iter().map(|tokentree| replace_tokens(tokentree, &ident_replace, n)).collect::<TokenStream2>()
+        tokens.clone().into_iter().peekable().replace_token(&ident_replace, n).collect::<TokenStream2>()
     }).collect::<TokenStream2>();
 
     quote! {
         #tokens
     }.into()
-}
-
-fn replace_tokens(
-    token_tree: TokenTree,
-    ident_replace: &Ident,
-    n: usize,
-) -> TokenTree {
-    match token_tree {
-        TokenTree::Group(group) => {
-            let delimiter = group.delimiter();
-            let stream = group.stream().into_iter().map(|token_tree| replace_tokens(token_tree, ident_replace, n)).collect::<TokenStream2>();
-            let span = group.span();
-            let mut group = Group::new(delimiter, stream);
-            group.set_span(span);
-            TokenTree::Group(group)
-        },
-        TokenTree::Ident(ident) => {
-            if ident == *ident_replace {
-                TokenTree::Literal(Literal::usize_unsuffixed(n))
-            } else {
-                TokenTree::Ident(ident)
-            }
-        },
-        TokenTree::Punct(_) => token_tree,
-        TokenTree::Literal(_) => token_tree,
-    }
 }
