@@ -1,8 +1,6 @@
-use std::iter::Peekable;
-
 use proc_macro::TokenStream;
-use proc_macro2::{TokenStream as TokenStream2, TokenTree, Literal, Group, Span};
-use quote::quote;
+use proc_macro2::{TokenStream as TokenStream2, TokenTree, Literal, Group, Span, Delimiter};
+use quote::{quote, ToTokens};
 use syn::{Ident, parse::Parse, parse_macro_input, Token, LitInt, braced};
 
 #[derive(Debug)]
@@ -33,75 +31,122 @@ impl Parse for Seq {
     }
 }
 
-struct ReplaceTokenState<'a, 'b, T>
-    where T: Iterator<Item=TokenTree> {
-        iter: &'a mut Peekable<T>,
-        ident_replace: &'b Ident,
+#[derive(Debug, Clone)]
+enum SeqTokenTree {
+    Raw(TokenTree),
+    Ident(Vec<syn::Ident>),
+    Group(SeqGroup),
+}
+
+impl SeqTokenTree {
+    fn to_token_tree(
+        &self,
         n: usize,
-}
-
-trait ReplaceToken<T: std::iter::Iterator<Item = proc_macro2::TokenTree>> {
-    fn replace_token<'a>(
-        &mut self,
-        ident_replace: &'a Ident,
-        n: usize
-    ) -> ReplaceTokenState<'_, 'a, T>;
-}
-
-impl<T> ReplaceToken<T> for Peekable<T>
-    where T: Iterator<Item=TokenTree>
-{
-    fn replace_token<'a>(&mut self, ident_replace: &'a Ident, n: usize) -> ReplaceTokenState<'_, 'a, T> {
-        ReplaceTokenState {
-            iter: self,
-            ident_replace,
-            n
+        ident_replace: &Ident,
+    ) -> TokenTree {
+        match self {
+            SeqTokenTree::Raw(tree) => {
+                if let TokenTree::Ident(ident) = tree {
+                    if ident == ident_replace {
+                        TokenTree::Literal(Literal::usize_unsuffixed(n))
+                    } else {
+                        TokenTree::Ident(ident.clone())
+                    }
+                } else {
+                    tree.clone()
+                }
+            },
+            SeqTokenTree::Ident(idents) => {
+                let new_ident_name = idents.iter().map(|ident| {
+                    if ident == ident_replace {
+                        n.to_string()
+                    } else {
+                        ident.to_string()
+                    }
+                }).collect::<Vec<_>>().join("");
+                TokenTree::Ident(proc_macro2::Ident::new(&new_ident_name, Span::call_site()))
+            },
+            SeqTokenTree::Group(seq_group) => {
+                let stream = seq_group.trees.token_trees.iter().map(|v| v.to_token_tree(n, ident_replace)).collect::<TokenStream2>();
+                let mut group = proc_macro2::Group::new(seq_group.delimiter, stream);
+                group.set_span(seq_group.span);
+                TokenTree::Group(group)
+            },
         }
     }
 }
 
-impl<T: std::iter::Iterator<Item = proc_macro2::TokenTree>> Iterator for ReplaceTokenState<'_, '_, T> {
-    type Item = TokenTree;
+#[derive(Debug, Clone)]
+struct SeqTrees {
+    pub token_trees: Vec<SeqTokenTree>,
+}
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let token_tree = self.iter.next()?;
-        let token_tree = match token_tree {
-            TokenTree::Group(group) => {
-                let delimiter = group.delimiter();
-                let stream = group.stream().into_iter().peekable().replace_token(self.ident_replace, self.n).collect::<TokenStream2>();
-                let span = group.span();
-                let mut group = Group::new(delimiter, stream);
-                group.set_span(span);
-                TokenTree::Group(group)
-            },
-            TokenTree::Ident(ident) => {
-                if let Some(TokenTree::Punct(next)) = self.iter.peek() {
-                    if next.as_char() == '~' {
-                        self.iter.next()?; // consume ~
-                        let TokenTree::Ident(next) = self.iter.next().unwrap() else {
-                            panic!("element followed after ~ is not ident");
-                        };
-                        let next = if next == *self.ident_replace {
-                            self.n.to_string()
-                        } else {
-                            next.to_string()
-                        };
-                        TokenTree::Ident(Ident::new(&format!("{}{}", ident, next), Span::call_site()))
-                    } else if ident == *self.ident_replace {
-                        TokenTree::Literal(Literal::usize_unsuffixed(self.n))
-                    } else {
-                        TokenTree::Ident(ident)
-                    }
-                } else if ident == *self.ident_replace {
-                    TokenTree::Literal(Literal::usize_unsuffixed(self.n))
+#[derive(Debug, Clone)]
+struct SeqGroup {
+    delimiter: Delimiter,
+    trees: SeqTrees,
+    span: Span,
+}
+
+impl Parse for SeqTrees {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut trees = Vec::<SeqTokenTree>::new();
+        loop {
+            if input.is_empty() {
+                break;
+            }
+            let tree = input.parse::<TokenTree>()?;
+            if input.peek(Token![~]) {
+                if let TokenTree::Ident(ident) = tree {
+                    input.parse::<Token![~]>()?;
+                    let next = input.parse::<Ident>()?;
+                    trees.push(SeqTokenTree::Ident(vec![ident, next]))
                 } else {
-                    TokenTree::Ident(ident)
+                    trees.push(SeqTokenTree::Raw(tree));
                 }
-            },
-            TokenTree::Punct(_) => token_tree,
-            TokenTree::Literal(_) => token_tree,
-        };
-        Some(token_tree)
+            } else if let TokenTree::Group(group) = tree {
+                let group_trees = syn::parse2::<SeqTrees>(group.stream())?;
+                let seq_group = SeqGroup {
+                    delimiter: group.delimiter(),
+                    trees: group_trees,
+                    span: group.span(),
+                };
+                trees.push(SeqTokenTree::Group(seq_group));
+            } else {
+                trees.push(SeqTokenTree::Raw(tree));
+            }
+        }
+        Ok(Self {
+            token_trees: trees
+        })
+    }
+}
+
+struct SeqGroupToReplace<'a, 'b> {
+    n: usize,
+    group: &'a SeqTrees,
+    ident: &'b Ident,
+}
+
+impl<'a, 'b> SeqGroupToReplace<'a, 'b> {
+    pub fn new(
+        n: usize,
+        group: &'a SeqTrees,
+        ident: &'b Ident,
+    ) -> Self {
+        SeqGroupToReplace {
+            n,
+            group,
+            ident
+        }
+    }
+}
+
+impl ToTokens for SeqGroupToReplace<'_, '_> {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        let tokentree_iter = self.group.token_trees.clone().into_iter().map(|tree| tree.to_token_tree(self.n, self.ident));
+
+        tokens.extend(tokentree_iter);
     }
 }
 
@@ -124,8 +169,13 @@ pub fn seq(input: TokenStream) -> TokenStream {
             .into();
     };
 
+   let seq_token_tree = match syn::parse2::<SeqTrees>(tokens.clone()) {
+        Ok(data) => data,
+        Err(err) => return err.into_compile_error().into(),
+    };
+    
     let tokens = (start..end).map(|n| {
-        tokens.clone().into_iter().peekable().replace_token(&ident_replace, n).collect::<TokenStream2>()
+        SeqGroupToReplace::new(n, &seq_token_tree, &ident_replace).to_token_stream()
     }).collect::<TokenStream2>();
 
     quote! {
