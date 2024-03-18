@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
-use proc_macro2::{TokenStream as TokenStream2, TokenTree, Literal, Group, Span, Delimiter};
+use proc_macro2::{TokenStream as TokenStream2, TokenTree, Literal, Span, Delimiter};
 use quote::{quote, ToTokens};
-use syn::{Ident, parse::Parse, parse_macro_input, Token, LitInt, braced};
+use syn::{Ident, parse::Parse, parse_macro_input, Token, LitInt, braced, parenthesized};
 
 #[derive(Debug)]
 struct Seq {
@@ -36,41 +36,52 @@ enum SeqTokenTree {
     Raw(TokenTree),
     Ident(Vec<syn::Ident>),
     Group(SeqGroup),
+    Trees(SeqTrees),
 }
 
 impl SeqTokenTree {
     fn to_token_tree(
         &self,
-        n: usize,
+        start: usize,
+        end: usize,
         ident_replace: &Ident,
-    ) -> TokenTree {
+    ) -> TokenStream2 {
         match self {
             SeqTokenTree::Raw(tree) => {
                 if let TokenTree::Ident(ident) = tree {
                     if ident == ident_replace {
-                        TokenTree::Literal(Literal::usize_unsuffixed(n))
+                        TokenTree::Literal(Literal::usize_unsuffixed(start)).into()
                     } else {
-                        TokenTree::Ident(ident.clone())
+                        TokenTree::Ident(ident.clone()).into()
                     }
                 } else {
-                    tree.clone()
+                    tree.clone().into()
                 }
             },
             SeqTokenTree::Ident(idents) => {
                 let new_ident_name = idents.iter().map(|ident| {
                     if ident == ident_replace {
-                        n.to_string()
+                        start.to_string()
                     } else {
                         ident.to_string()
                     }
                 }).collect::<Vec<_>>().join("");
-                TokenTree::Ident(proc_macro2::Ident::new(&new_ident_name, Span::call_site()))
+                TokenTree::Ident(proc_macro2::Ident::new(&new_ident_name, Span::call_site())).into()
             },
             SeqTokenTree::Group(seq_group) => {
-                let stream = seq_group.trees.token_trees.iter().map(|v| v.to_token_tree(n, ident_replace)).collect::<TokenStream2>();
+                let stream = seq_group.trees.token_trees.iter().map(|v| v.to_token_tree(start, end, ident_replace)).collect::<TokenStream2>();
                 let mut group = proc_macro2::Group::new(seq_group.delimiter, stream);
                 group.set_span(seq_group.span);
-                TokenTree::Group(group)
+                TokenTree::Group(group).into()
+            },
+            SeqTokenTree::Trees(trees) => {
+                if trees.to_expand {
+                    (start..end).map(|n| {
+                        trees.token_trees.iter().map(|v| v.to_token_tree(n, n+1, ident_replace)).collect::<TokenStream2>()
+                    }).collect::<TokenStream2>()
+                } else {
+                    trees.token_trees.iter().map(|v| v.to_token_tree(start, end, ident_replace)).collect::<TokenStream2>()
+                }
             },
         }
     }
@@ -78,6 +89,7 @@ impl SeqTokenTree {
 
 #[derive(Debug, Clone)]
 struct SeqTrees {
+    pub to_expand: bool,
     pub token_trees: Vec<SeqTokenTree>,
 }
 
@@ -88,12 +100,39 @@ struct SeqGroup {
     span: Span,
 }
 
+impl SeqTrees {
+    fn has_to_expand(&self) -> bool {
+        if self.to_expand {
+            true
+        } else {
+            self.token_trees.iter().any(|tree| {
+                match tree {
+                    SeqTokenTree::Raw(_) => false,
+                    SeqTokenTree::Ident(_) => false,
+                    SeqTokenTree::Group(group) => group.trees.has_to_expand(),
+                    SeqTokenTree::Trees(tree) => tree.has_to_expand(),
+                }
+            })
+        }
+    }
+}
+
 impl Parse for SeqTrees {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut trees = Vec::<SeqTokenTree>::new();
         loop {
             if input.is_empty() {
                 break;
+            }
+            if input.peek(Token![#]) && input.peek2(syn::token::Paren) {
+                let content;
+                input.parse::<Token![#]>()?;
+                parenthesized!(content in input);
+                input.parse::<Token![*]>()?;
+                let mut seq_trees = content.parse::<SeqTrees>()?;
+                seq_trees.to_expand = true;
+                trees.push(SeqTokenTree::Trees(seq_trees));
+                continue;
             }
             let tree = input.parse::<TokenTree>()?;
             if input.peek(Token![~]) {
@@ -117,25 +156,29 @@ impl Parse for SeqTrees {
             }
         }
         Ok(Self {
+            to_expand: false,
             token_trees: trees
         })
     }
 }
 
 struct SeqGroupToReplace<'a, 'b> {
-    n: usize,
+    start: usize,
+    end: usize,
     group: &'a SeqTrees,
     ident: &'b Ident,
 }
 
 impl<'a, 'b> SeqGroupToReplace<'a, 'b> {
     pub fn new(
-        n: usize,
+        start: usize,
+        end: usize,
         group: &'a SeqTrees,
         ident: &'b Ident,
     ) -> Self {
         SeqGroupToReplace {
-            n,
+            start,
+            end,
             group,
             ident
         }
@@ -144,7 +187,7 @@ impl<'a, 'b> SeqGroupToReplace<'a, 'b> {
 
 impl ToTokens for SeqGroupToReplace<'_, '_> {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
-        let tokentree_iter = self.group.token_trees.clone().into_iter().map(|tree| tree.to_token_tree(self.n, self.ident));
+        let tokentree_iter = SeqTokenTree::Trees(self.group.clone()).to_token_tree(self.start, self.end, self.ident);
 
         tokens.extend(tokentree_iter);
     }
@@ -169,14 +212,13 @@ pub fn seq(input: TokenStream) -> TokenStream {
             .into();
     };
 
-   let seq_token_tree = match syn::parse2::<SeqTrees>(tokens.clone()) {
+   let mut seq_token_tree = match syn::parse2::<SeqTrees>(tokens.clone()) {
         Ok(data) => data,
         Err(err) => return err.into_compile_error().into(),
     };
+    seq_token_tree.to_expand = seq_token_tree.to_expand || !seq_token_tree.has_to_expand();
     
-    let tokens = (start..end).map(|n| {
-        SeqGroupToReplace::new(n, &seq_token_tree, &ident_replace).to_token_stream()
-    }).collect::<TokenStream2>();
+    let tokens = SeqGroupToReplace::new(start, end, &seq_token_tree, &ident_replace).to_token_stream();
 
     quote! {
         #tokens
