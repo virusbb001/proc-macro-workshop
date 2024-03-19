@@ -1,3 +1,5 @@
+use std::ops::{Range, RangeInclusive};
+
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as TokenStream2, TokenTree, Literal, Span, Delimiter};
 use quote::{quote, ToTokens};
@@ -8,6 +10,7 @@ struct Seq {
     ident_replace: Ident,
     start: LitInt,
     end: LitInt,
+    inclusive: bool,
     tokens: TokenStream2
 }
 
@@ -17,6 +20,7 @@ impl Parse for Seq {
         input.parse::<Token![in]>()?;
         let start = input.parse::<LitInt>()?;
         input.parse::<Token![..]>()?;
+        let inclusive = input.parse::<Option<Token![=]>>()?.is_some();
         let end = input.parse::<LitInt>()?;
         let content;
         braced!(content in input);
@@ -26,6 +30,7 @@ impl Parse for Seq {
             ident_replace,
             start,
             end,
+            inclusive,
             tokens,
         })
     }
@@ -40,17 +45,16 @@ enum SeqTokenTree {
 }
 
 impl SeqTokenTree {
-    fn to_token_tree(
+    fn to_token_tree<T>(
         &self,
-        start: usize,
-        end: usize,
+        iter: &mut T,
         ident_replace: &Ident,
-    ) -> TokenStream2 {
+    ) -> TokenStream2 where T: Iterator<Item=usize> + Clone{
         match self {
             SeqTokenTree::Raw(tree) => {
                 if let TokenTree::Ident(ident) = tree {
                     if ident == ident_replace {
-                        TokenTree::Literal(Literal::usize_unsuffixed(start)).into()
+                        TokenTree::Literal(Literal::usize_unsuffixed(iter.next().unwrap())).into()
                     } else {
                         TokenTree::Ident(ident.clone()).into()
                     }
@@ -61,7 +65,7 @@ impl SeqTokenTree {
             SeqTokenTree::Ident(idents) => {
                 let new_ident_name = idents.iter().map(|ident| {
                     if ident == ident_replace {
-                        start.to_string()
+                        iter.next().unwrap().to_string()
                     } else {
                         ident.to_string()
                     }
@@ -69,18 +73,18 @@ impl SeqTokenTree {
                 TokenTree::Ident(proc_macro2::Ident::new(&new_ident_name, Span::call_site())).into()
             },
             SeqTokenTree::Group(seq_group) => {
-                let stream = seq_group.trees.token_trees.iter().map(|v| v.to_token_tree(start, end, ident_replace)).collect::<TokenStream2>();
+                let stream = seq_group.trees.token_trees.iter().map(|v| v.to_token_tree(iter, ident_replace)).collect::<TokenStream2>();
                 let mut group = proc_macro2::Group::new(seq_group.delimiter, stream);
                 group.set_span(seq_group.span);
                 TokenTree::Group(group).into()
             },
             SeqTokenTree::Trees(trees) => {
                 if trees.to_expand {
-                    (start..end).map(|n| {
-                        trees.token_trees.iter().map(|v| v.to_token_tree(n, n+1, ident_replace)).collect::<TokenStream2>()
+                    iter.map(|n| {
+                        trees.token_trees.iter().map(|v| v.to_token_tree(&mut std::iter::once(n), ident_replace)).collect::<TokenStream2>()
                     }).collect::<TokenStream2>()
                 } else {
-                    trees.token_trees.iter().map(|v| v.to_token_tree(start, end, ident_replace)).collect::<TokenStream2>()
+                    trees.token_trees.iter().map(|v| v.to_token_tree(iter, ident_replace)).collect::<TokenStream2>()
                 }
             },
         }
@@ -163,22 +167,19 @@ impl Parse for SeqTrees {
 }
 
 struct SeqGroupToReplace<'a, 'b> {
-    start: usize,
-    end: usize,
+    range: RangeWrapper,
     group: &'a SeqTrees,
     ident: &'b Ident,
 }
 
 impl<'a, 'b> SeqGroupToReplace<'a, 'b> {
     pub fn new(
-        start: usize,
-        end: usize,
+        range: RangeWrapper,
         group: &'a SeqTrees,
         ident: &'b Ident,
     ) -> Self {
         SeqGroupToReplace {
-            start,
-            end,
+            range,
             group,
             ident
         }
@@ -187,9 +188,39 @@ impl<'a, 'b> SeqGroupToReplace<'a, 'b> {
 
 impl ToTokens for SeqGroupToReplace<'_, '_> {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
-        let tokentree_iter = SeqTokenTree::Trees(self.group.clone()).to_token_tree(self.start, self.end, self.ident);
+        let mut iter = self.range.clone();
+        let tokentree_iter = SeqTokenTree::Trees(self.group.clone()).to_token_tree(&mut iter, self.ident);
 
         tokens.extend(tokentree_iter);
+    }
+}
+
+#[derive(Clone)]
+enum RangeWrapper {
+    Range(Range<usize>),
+    RangeInclusive(RangeInclusive<usize>)
+}
+
+impl Iterator for RangeWrapper {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            RangeWrapper::Range(r) => r.next(),
+            RangeWrapper::RangeInclusive(r) => r.next(),
+        }
+    }
+}
+
+impl From<Range<usize>> for RangeWrapper {
+    fn from(value: Range<usize>) -> Self {
+        Self::Range(value)
+    }
+}
+
+impl From<RangeInclusive<usize>> for RangeWrapper {
+    fn from(value: RangeInclusive<usize>) -> Self {
+        Self::RangeInclusive(value)
     }
 }
 
@@ -200,6 +231,7 @@ pub fn seq(input: TokenStream) -> TokenStream {
         start,
         end,
         tokens,
+        inclusive,
     } = parse_macro_input!(input as Seq);
     let start = start.base10_parse::<usize>();
     let end = end.base10_parse::<usize>();
@@ -218,7 +250,8 @@ pub fn seq(input: TokenStream) -> TokenStream {
     };
     seq_token_tree.to_expand = seq_token_tree.to_expand || !seq_token_tree.has_to_expand();
     
-    let tokens = SeqGroupToReplace::new(start, end, &seq_token_tree, &ident_replace).to_token_stream();
+    let range: RangeWrapper = if inclusive { (start..=end).into() } else { (start..end).into() };
+    let tokens = SeqGroupToReplace::new(range, &seq_token_tree, &ident_replace).to_token_stream();
 
     quote! {
         #tokens
