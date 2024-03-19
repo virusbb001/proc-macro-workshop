@@ -70,7 +70,8 @@ impl SeqTokenTree {
                         ident.to_string()
                     }
                 }).collect::<Vec<_>>().join("");
-                TokenTree::Ident(proc_macro2::Ident::new(&new_ident_name, Span::call_site())).into()
+                let span = idents.first().map(|ident| ident.span()).unwrap_or(Span::call_site());
+                TokenTree::Ident(proc_macro2::Ident::new(&new_ident_name, span)).into()
             },
             SeqTokenTree::Group(seq_group) => {
                 let stream = seq_group.trees.token_trees.iter().map(|v| v.to_token_tree(iter, ident_replace)).collect::<TokenStream2>();
