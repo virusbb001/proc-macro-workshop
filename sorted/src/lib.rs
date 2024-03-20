@@ -64,21 +64,23 @@ impl VisitMut for SortedInFn {
         if let Some(sorted_index) = sorted_position {
             expr_match.attrs.remove(sorted_index);
 
-            let paths = expr_match.arms.iter().map(|arm| {
-                if let Pat::TupleStruct(tuple_struct) = &arm.pat {
-                    Ok(&tuple_struct.path)
-                } else {
-                    Err(syn::Error::new(arm.pat.span(), "unsupported by #[sorted]"))
+            fn path_to_str(path: &syn::Path) -> (String, Span) {
+                let span = path.span();
+                let str = path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::");
+                (str, span)
+            }
+
+            let ident_spans = expr_match.arms.iter().map(|arm| {
+                match &arm.pat {
+                    Pat::TupleStruct(tuple_struct) => Ok(path_to_str(&tuple_struct.path)),
+                    Pat::Ident(pat_ident) => Ok((pat_ident.ident.to_string(), pat_ident.ident.span())),
+                    Pat::Wild(pat_wild) => Ok(("_".to_string(), pat_wild.span())),
+                    _ => Err(syn::Error::new(arm.pat.span(), "unsupported by #[sorted]")),
                 }
             }).collect::<Result<Vec<_>, _>>();
-            let errors = match paths {
+            let errors = match ident_spans {
                 Ok(paths) => {
-                    let idents = paths.iter().map(|path| {
-                        let span = path.span();
-                        let str = path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::");
-                        (str, span)
-                    }).collect::<Vec<_>>();
-                    get_unsorted_items(&idents).iter().map(|wrong| wrong.into()).collect::<Vec<_>>()
+                    get_unsorted_items(&paths).iter().map(|wrong| wrong.into()).collect::<Vec<_>>()
                 },
                 Err(err) => vec![err],
             };
