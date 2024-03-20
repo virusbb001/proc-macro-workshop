@@ -28,7 +28,7 @@ pub fn sorted(args: TokenStream, input: TokenStream) -> TokenStream {
         .enumerate()
         .collect::<Vec<_>>();
     sorted_variants.sort_by_key(|v| v.1);
-    let wrong_positions = sorted_variants
+    let mut wrong_positions = sorted_variants
         .iter()
         .enumerate()
         .filter_map(|(i, item)| {
@@ -50,9 +50,6 @@ pub fn sorted(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
         })
         .collect::<TokenStream2>();
-    if wrong_positions.is_empty() {
-        item_enum.to_token_stream().into()
-    } else {
-        wrong_positions.into()
-    }
+    wrong_positions.extend(item_enum.to_token_stream());
+    wrong_positions.into()
 }
