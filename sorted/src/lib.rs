@@ -54,7 +54,7 @@ pub fn sorted(args: TokenStream, input: TokenStream) -> TokenStream {
     wrong_positions.into()
 }
 
-struct SortedInFn(Vec<WrongLocations>);
+struct SortedInFn(Vec<syn::Error>);
 
 impl VisitMut for SortedInFn {
     fn visit_expr_match_mut (&mut self, expr_match: &mut ExprMatch) {
@@ -63,17 +63,27 @@ impl VisitMut for SortedInFn {
         });
         if let Some(sorted_index) = sorted_position {
             expr_match.attrs.remove(sorted_index);
-            let idents = expr_match.arms.iter().filter_map(|arm| {
+
+            let paths = expr_match.arms.iter().map(|arm| {
                 if let Pat::TupleStruct(tuple_struct) = &arm.pat {
-                    let path = &tuple_struct.path;
-                    let span = path.span();
-                    let str = path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::");
-                    Some((str, span))
+                    Ok(&tuple_struct.path)
                 } else {
-                    None
+                    Err(syn::Error::new(arm.pat.span(), "unsupported by #[sorted]"))
                 }
-            }).collect::<Vec<_>>();
-            self.0.extend(get_unsorted_items(&idents));
+            }).collect::<Result<Vec<_>, _>>();
+            let errors = match paths {
+                Ok(paths) => {
+                    let idents = paths.iter().map(|path| {
+                        let span = path.span();
+                        let str = path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::");
+                        (str, span)
+                    }).collect::<Vec<_>>();
+                    get_unsorted_items(&idents).iter().map(|wrong| wrong.into()).collect::<Vec<_>>()
+                },
+                Err(err) => vec![err],
+            };
+
+            self.0.extend(errors);
         }
         visit_mut::visit_expr_match_mut(self, expr_match);
     }
@@ -86,7 +96,7 @@ pub fn check(_: TokenStream, input: TokenStream) -> TokenStream {
     sorted_in_fn.visit_item_fn_mut(&mut item);
     let mut errors = sorted_in_fn.0
         .iter()
-        .map(|wrong| syn::Error::from(wrong).to_compile_error())
+        .map(|err| err.to_compile_error())
         .collect::<TokenStream2>();
     errors.extend(item.to_token_stream());
     errors.into()
