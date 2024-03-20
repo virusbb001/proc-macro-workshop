@@ -3,9 +3,9 @@ use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::ToTokens;
 use syn::ExprMatch;
-use syn::Ident;
 use syn::Pat;
 use syn::parse_macro_input;
+use syn::spanned::Spanned;
 use syn::visit_mut;
 use syn::visit_mut::VisitMut;
 
@@ -39,6 +39,7 @@ pub fn sorted(args: TokenStream, input: TokenStream) -> TokenStream {
         .variants
         .iter()
         .map(|variant| &variant.ident)
+        .map(|ident| (ident.to_string(), ident.span()))
         .collect::<Vec<_>>();
     let mut wrong_positions = get_unsorted_items(&idents).iter()
         .map(|wrong| {
@@ -64,7 +65,10 @@ impl VisitMut for SortedInFn {
             expr_match.attrs.remove(sorted_index);
             let idents = expr_match.arms.iter().filter_map(|arm| {
                 if let Pat::TupleStruct(tuple_struct) = &arm.pat {
-                    tuple_struct.path.segments.last().map(|segment| &segment.ident)
+                    let path = &tuple_struct.path;
+                    let span = path.span();
+                    let str = path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::");
+                    Some((str, span))
                 } else {
                     None
                 }
@@ -88,9 +92,9 @@ pub fn check(_: TokenStream, input: TokenStream) -> TokenStream {
     errors.into()
 }
 
-fn get_unsorted_items(idents: &[&Ident]) -> Vec<WrongLocations> {
+fn get_unsorted_items(idents: &[(String, Span)]) -> Vec<WrongLocations> {
     let mut idents = idents.iter().enumerate().collect::<Vec<_>>();
-    idents.sort_by_key(|v| v.1);
+    idents.sort_by_key(|v| &v.1.0);
 
     idents
         .iter()
@@ -101,9 +105,9 @@ fn get_unsorted_items(idents: &[&Ident]) -> Vec<WrongLocations> {
                 .skip(i + 1)
                 .find(|v| v.0 < item.0)
                 .map(|other| WrongLocations {
-                    target: item.1.to_string(),
-                    expected: other.1.to_string(),
-                    span: item.1.span(),
+                    target: item.1.0.to_string(),
+                    expected: other.1.0.to_string(),
+                    span: item.1.1,
                 })
         })
         .collect::<Vec<_>>()
