@@ -24,3 +24,52 @@ seq!(N in 0..64 {
         const BITS: usize = N;
     }
 });
+
+/**
+* field_size: length of bits
+* offset: offset of bitfields. It should be less than 8
+*
+* big endian
+*/
+pub fn create_bit_masks(field_size: usize, offset: u8) -> Vec<u8> {
+    let high_bit = field_size + usize::from(offset);
+    let size = high_bit / 8;
+    let mut fields = (0..=size).map(|_| !0_u8).collect::<Vec<_>>();
+    let mask_width = if fields.len() == 1 {
+        offset + u8::try_from(field_size).unwrap()
+    } else {
+        offset
+    };
+    let mask = 2_u8.pow(mask_width.into()) - 1;
+    if let Some(v) = fields.first_mut() {
+        *v = mask;
+    }
+    if let Some(v) = fields.last_mut() {
+        *v &= !0_u8 << offset;
+    }
+
+    fields
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_bit_masks() {
+        let result = create_bit_masks(8, 4);
+        assert_eq!(result, vec![0b00001111, 0b11110000]);
+        create_bit_masks(1, 0);
+        create_bit_masks(2, 0);
+        create_bit_masks(2, 1);
+        create_bit_masks(2, 2);
+        let result = create_bit_masks(1, 0);
+        assert_eq!(result, vec![0b00000001]);
+
+        let result = create_bit_masks(1, 1);
+        assert_eq!(result, vec![0b00000010]);
+
+        let result = create_bit_masks(3, 3);
+        assert_eq!(result, vec![0b00111000]);
+    }
+}
