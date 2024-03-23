@@ -38,10 +38,11 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
             let offset = quote! { 0 #(+ #offset)* };
 
             let ident = field.ident.as_ref()?;
+            let field_type = quote! { <#ty as Specifier>::T };
             let getter = Ident::new(&format!("get_{}", ident), Span::call_site());
             let setter = Ident::new(&format!("set_{}", ident), Span::call_site());
             Some(quote! {
-                fn #getter (&self) -> u64 {
+                fn #getter (&self) -> #field_type {
                     let bits = #bits;
                     let offset = #offset;
 
@@ -51,7 +52,7 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
                     let bit_offset = u8::try_from(offset % 8).unwrap();
                     let mask_for_get_data = 2_u8.pow(bit_offset.into())-1;
 
-                    create_bit_masks(bits, bit_offset)
+                    let v = create_bit_masks(bits, bit_offset)
                         .into_iter()
                         .rev()
                         .enumerate()
@@ -69,16 +70,19 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
                             let data = d >> bit_offset | c << bit_offset;
                             Some(data)
                         })
-                        .fold(0_u64, |decoded, d| decoded << 8 | u64::from(d))
+                        .fold(0_u64, |decoded, d| decoded << 8 | u64::from(d));
+                    
+                    #field_type::try_from(v).unwrap()
                 }
 
-                fn #setter (&mut self, v: u64) {
+                fn #setter (&mut self, v: #field_type) {
                     let bits = #bits;
                     let offset = #offset;
 
                     let data_len = self.data.len();
                     let arr_offset = offset / 8;
                     let bit_offset = u8::try_from(offset % 8).unwrap();
+                    let v = u64::from(v);
 
                     // little endian
                     let value_bits = v

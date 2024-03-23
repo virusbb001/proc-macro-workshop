@@ -10,7 +10,6 @@
 //
 // From the perspective of a user of this crate, they get all the necessary APIs
 // (macro, trait, struct) through the one bitfield crate.
-#![allow(clippy::eq_op)]
 
 pub use bitfield_impl::bitfield;
 use seq::seq;
@@ -18,15 +17,26 @@ pub mod checks;
 
 pub trait Specifier {
     const BITS: usize;
+    type T;
 }
 
-seq!(N in 0..64 {
-    pub enum B~N {}
+macro_rules! define_bit_enums {
+    ($t: ty, $range: pat_param) => {
+        seq!(N in $range {
+            pub enum B~N {}
 
-    impl Specifier for B~N {
-        const BITS: usize = N;
+            impl Specifier for B~N {
+                const BITS: usize = N;
+                type T = $t;
+            }
+        });
     }
-});
+}
+
+define_bit_enums!(u8, 0..=8);
+define_bit_enums!(u16, 9..=16);
+define_bit_enums!(u32, 17..=32);
+define_bit_enums!(u64, 33..=64);
 
 /**
 * field_size: length of bits
