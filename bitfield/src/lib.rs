@@ -10,8 +10,11 @@
 //
 // From the perspective of a user of this crate, they get all the necessary APIs
 // (macro, trait, struct) through the one bitfield crate.
+#![allow(clippy::eq_op)]
+
 pub use bitfield_impl::bitfield;
 use seq::seq;
+pub mod checks;
 
 pub trait Specifier {
     const BITS: usize;
@@ -50,7 +53,6 @@ pub fn create_bit_masks(field_size: usize, offset: u8) -> Vec<u8> {
 
     fields
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

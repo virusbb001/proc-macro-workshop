@@ -15,6 +15,8 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
         .map(|field| &field.ty)
         .collect::<Vec<_>>();
 
+    let field_bits = field_tys.iter().map(|ty| quote! { #ty::BITS }).collect::<Vec<_>>();
+
     let struct_define = quote! {
         #[repr(C)]
         pub struct #struct_name {
@@ -119,6 +121,8 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
         #struct_define
 
         #impl_defines
+
+        const _: self::checks::MultipleOfEight<[(); (0 #(+ #field_bits)* )% 8]> = ();
     }
     .into()
 }
