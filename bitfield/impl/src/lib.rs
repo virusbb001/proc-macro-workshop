@@ -22,6 +22,34 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
             _ if #ident::#name as u64 == item => #ident::#name
         }
     });
+
+    let arr_list = data_enum.variants.iter().map(|variant| {
+        let name = &variant.ident;
+        quote! {
+            #ident::#name as usize
+        }
+    });
+    let check_discriminant_range = quote! {
+        const _: () = {
+            let mut max = 0_usize;
+            let a = [#(#arr_list,)*];
+            let mut i = 0;
+            while i < a.len() {
+                max = if max < a[i] {
+                    a[i]
+                } else {
+                        max
+                    };
+                i+=1;
+            }
+
+            let bits: usize = 1 << #ident::BITS;
+
+            if max >= bits {
+                panic!("max discriminant is out of range");
+            }
+        };
+    };
     quote! {
         impl Specifier for #ident {
             const BITS:usize = #bn::BITS;
@@ -38,6 +66,8 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
                 }
             }
         }
+
+        #check_discriminant_range
     }.into()
 }
 
