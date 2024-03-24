@@ -12,12 +12,36 @@
 // (macro, trait, struct) through the one bitfield crate.
 
 pub use bitfield_impl::bitfield;
+pub use bitfield_impl::BitfieldSpecifier;
 use seq::seq;
 pub mod checks;
 
 pub trait Specifier {
     const BITS: usize;
     type T;
+
+    fn convert_to_u64(item: Self::T) -> u64;
+    fn convert_from_u64(v: u64) -> Self::T;
+}
+
+impl Specifier for bool {
+    const BITS: usize = 1;
+    type T = bool;
+
+    fn convert_to_u64(item: Self::T) -> u64 {
+        match item {
+            true => 1,
+            false => 0,
+        }
+    }
+
+    fn convert_from_u64(v: u64) -> Self::T {
+        match v {
+            0 => false,
+            1 => true,
+            _ => panic!("unexpected value: {}", v),
+        }
+    }
 }
 
 macro_rules! define_bit_enums {
@@ -28,6 +52,13 @@ macro_rules! define_bit_enums {
             impl Specifier for B~N {
                 const BITS: usize = N;
                 type T = $t;
+                fn convert_to_u64(item: Self::T) -> u64 {
+                    u64::from(item)
+                }
+
+                fn convert_from_u64(v: u64) -> Self::T {
+                    Self::T::try_from(v).unwrap()
+                }
             }
         });
     }

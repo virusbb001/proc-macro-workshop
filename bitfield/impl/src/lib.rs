@@ -1,7 +1,46 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
-use syn::{parse_macro_input, Ident, ItemStruct};
+use syn::{parse_macro_input, Data, DeriveInput, Ident, ItemStruct};
+
+#[proc_macro_derive(BitfieldSpecifier)]
+pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
+    let derive_input = parse_macro_input!(input as DeriveInput);
+    let Data::Enum(data_enum) = derive_input.data else {
+        return syn::Error::new(Span::call_site(), "BitfieldSpecifier can only use for enum").into_compile_error().into();
+    };
+    let variants_number = data_enum.variants.len();
+    if !variants_number.is_power_of_two() {
+        return syn::Error::new(Span::call_site(), format!("number of enum's variants should be power of 2: {}", variants_number)).into_compile_error().into();
+    }
+    let bits = variants_number.ilog2();
+    let bn = Ident::new(&format!("B{}", bits), Span::call_site());
+    let ident = &derive_input.ident;
+    let match_arms = data_enum.variants.iter().map(|variant| {
+        let discriminant = &variant.discriminant.as_ref().unwrap().1;
+        let name = &variant.ident;
+        quote! {
+            #discriminant => #ident::#name
+        }
+    });
+    quote! {
+        impl Specifier for #ident {
+            const BITS:usize = #bn::BITS;
+            type T = #ident;
+
+            fn convert_to_u64(item: Self::T) -> u64 {
+                item as u64
+            }
+
+            fn convert_from_u64(item: u64) -> Self::T {
+                match item {
+                    #(#match_arms,)*
+                    _ => panic!("unexpected value: {}", item),
+                }
+            }
+        }
+    }.into()
+}
 
 #[proc_macro_attribute]
 pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -72,7 +111,7 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
                         })
                         .fold(0_u64, |decoded, d| decoded << 8 | u64::from(d));
                     
-                    #field_type::try_from(v).unwrap()
+                    <#ty as Specifier>::convert_from_u64(v)
                 }
 
                 fn #setter (&mut self, v: #field_type) {
@@ -82,7 +121,7 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
                     let data_len = self.data.len();
                     let arr_offset = offset / 8;
                     let bit_offset = u8::try_from(offset % 8).unwrap();
-                    let v = u64::from(v);
+                    let v = <#ty as Specifier>::convert_to_u64(v);
 
                     // little endian
                     let value_bits = v
