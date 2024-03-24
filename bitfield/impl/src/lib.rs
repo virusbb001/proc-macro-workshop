@@ -11,7 +11,7 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
     };
     let variants_number = data_enum.variants.len();
     if !variants_number.is_power_of_two() {
-        return syn::Error::new(Span::call_site(), format!("number of enum's variants should be power of 2: {}", variants_number)).into_compile_error().into();
+        return syn::Error::new(Span::call_site(), "BitfieldSpecifier expected a number of variants which is a power of 2").into_compile_error().into();
     }
     let bits = variants_number.ilog2();
     let bn = Ident::new(&format!("B{}", bits), Span::call_site());
