@@ -17,10 +17,9 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
     let bn = Ident::new(&format!("B{}", bits), Span::call_site());
     let ident = &derive_input.ident;
     let match_arms = data_enum.variants.iter().map(|variant| {
-        let discriminant = &variant.discriminant.as_ref().unwrap().1;
         let name = &variant.ident;
         quote! {
-            #discriminant => #ident::#name
+            _ if #ident::#name as u64 == item => #ident::#name
         }
     });
     quote! {
