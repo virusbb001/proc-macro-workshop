@@ -94,6 +94,17 @@ pub fn create_bit_masks(field_size: usize, offset: u8) -> Vec<u8> {
 
     fields
 }
+pub fn create_value_bits(v: u64, bit_offset: u8) -> Vec<u8> {
+    v.to_le_bytes()
+        .into_iter()
+        .scan(0_u8, |cum, x| {
+            let left = *cum;
+            *cum = x.checked_shr((8 - bit_offset).into()).unwrap_or(0);
+            Some(x << bit_offset | left)
+        })
+        .collect::<Vec<_>>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +125,12 @@ mod tests {
 
         let result = create_bit_masks(3, 3);
         assert_eq!(result, vec![0b00111000]);
+    }
+
+    #[test]
+    fn test_create_value_bits() {
+        eprintln!("{:#?}", create_value_bits(1, 0));
+        assert_eq!(create_value_bits(1, 0), vec![1, 0, 0, 0, 0, 0, 0 ,0]);
+        assert_eq!(create_value_bits(1, 1), vec![0b10, 0, 0, 0, 0, 0, 0 ,0]);
     }
 }
