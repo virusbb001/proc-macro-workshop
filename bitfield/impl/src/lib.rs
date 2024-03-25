@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Ident, ItemStruct};
+use quote::{quote, quote_spanned};
+use syn::{parse_macro_input, spanned::Spanned, Data, DeriveInput, Ident, ItemStruct, Meta};
 
 #[proc_macro_derive(BitfieldSpecifier)]
 pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
@@ -38,8 +38,8 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
                 max = if max < a[i] {
                     a[i]
                 } else {
-                        max
-                    };
+                    max
+                };
                 i+=1;
             }
 
@@ -189,11 +189,35 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
+    // check bits attribute
+    let check_bits = item_struct
+        .fields
+        .iter()
+        .filter_map(|field| {
+            let ty = &field.ty;
+            let bit_attributes = field.attrs.iter().find_map(|attr| {
+                let Meta::NameValue(name_value) = &attr.meta else {
+                    return None;
+                };
+                if !(name_value.path.is_ident("bits")) {
+                    return None;
+                }
+                Some(&name_value.value)
+            })?;
+            let attr_span = bit_attributes.span();
+
+            Some(quote_spanned! { attr_span =>
+                const _: [(); #bit_attributes] = [(); <#ty as Specifier>::BITS];
+            })
+        })
+    ;
+
     quote! {
         #struct_define
 
         #impl_defines
 
+        #(#check_bits)*
         const _: self::checks::MultipleOfEight<[(); (0 #(+ #field_bits)* )% 8]> = ();
     }
     .into()
