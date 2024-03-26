@@ -130,15 +130,8 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
                             self.data[i] & mask
                         })
                         .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .scan(0, |curr, d| {
-                            let c = *curr;
-                            *curr = d & mask_for_get_data;
-                            let data = d >> bit_offset | c << bit_offset;
-                            Some(data)
-                        })
-                        .fold(0_u64, |decoded, d| decoded << 8 | u64::from(d));
+                        ;
+                    let v = create_value_from_le_bytes(&v, bit_offset);
                     
                     <#ty as Specifier>::convert_from_u64(v)
                 }
@@ -153,16 +146,7 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
                     let v = <#ty as Specifier>::convert_to_u64(v);
 
                     // little endian
-                    let value_bits = v
-                        .to_le_bytes()
-                        .into_iter()
-                        .scan(0_u8, |cum, x| {
-                            let left = *cum;
-                            *cum = x >> bit_offset;
-                            Some(x << bit_offset | left)
-                        })
-                        .collect::<Vec<_>>()
-                    ;
+                    let value_bits = create_value_bits(v, bit_offset);
 
                     create_bit_masks(bits, bit_offset)
                         .iter()
@@ -216,6 +200,14 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
         #struct_define
 
         #impl_defines
+
+        impl std::fmt::Display for #struct_name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.data.iter().enumerate().rev().try_for_each(|(i, d)| {
+                    f.write_fmt(format_args!("{:#2}: {:#010b}\n", i, d))
+                })
+            }
+        }
 
         #(#check_bits)*
         const _: self::checks::MultipleOfEight<[(); (0 #(+ #field_bits)* )% 8]> = ();

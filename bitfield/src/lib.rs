@@ -79,17 +79,13 @@ pub fn create_bit_masks(field_size: usize, offset: u8) -> Vec<u8> {
     let high_bit = field_size + usize::from(offset);
     let size = high_bit / 8;
     let mut fields = (0..=size).map(|_| !0_u8).collect::<Vec<_>>();
-    let mask_width = if fields.len() == 1 {
-        offset + u8::try_from(field_size).unwrap()
-    } else {
-        offset
-    };
-    let mask = 2_u8.pow(mask_width.into()) - 1;
+    let first_mask = !(!0 << (high_bit % 8));
+    let last_mask = !0_u8 << offset;
     if let Some(v) = fields.first_mut() {
-        *v = mask;
+        *v = first_mask;
     }
     if let Some(v) = fields.last_mut() {
-        *v &= !0_u8 << offset;
+        *v &= last_mask;
     }
 
     fields
@@ -105,9 +101,21 @@ pub fn create_value_bits(v: u64, bit_offset: u8) -> Vec<u8> {
         .collect::<Vec<_>>()
 }
 
+pub fn create_value_from_le_bytes (bytes: &[u8], offset: u8) -> u64 {
+    bytes.iter()
+        .rev()
+        .fold(0_u64, |cum, x| {
+                cum << 8 | u64::from(*x)
+        }) >> offset
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_bits(left: u64, right: u64) {
+        assert_eq!(left, right, "\n left: {:#10b}\nright: {:#10b}", left, right);
+    }
 
     #[test]
     fn test_create_bit_masks() {
@@ -125,12 +133,39 @@ mod tests {
 
         let result = create_bit_masks(3, 3);
         assert_eq!(result, vec![0b00111000]);
+
+        assert_eq!(
+        create_bit_masks(13, 0),
+        vec![
+            0b00011111,
+            0b11111111,
+        ]
+        );
     }
 
     #[test]
     fn test_create_value_bits() {
-        eprintln!("{:#?}", create_value_bits(1, 0));
         assert_eq!(create_value_bits(1, 0), vec![1, 0, 0, 0, 0, 0, 0 ,0]);
         assert_eq!(create_value_bits(1, 1), vec![0b10, 0, 0, 0, 0, 0, 0 ,0]);
+    }
+
+    #[test]
+    fn test_create_value_from_le_bytes () {
+        assert_eq!(create_value_from_le_bytes(&[
+            0b00000000
+        ], 0), 0);
+
+        assert_eq!(create_value_from_le_bytes(&[
+            0b00000001
+        ], 0), 1);
+        assert_bits(create_value_from_le_bytes(&[
+            0b10000001,
+            0b00000001
+        ], 0), 0b110000001);
+
+        assert_bits(create_value_from_le_bytes(&[
+            0b00000010,
+            0b00000011
+        ], 1), 0b110000001);
     }
 }
